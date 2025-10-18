@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!-- Base configuration for all network connections -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
@@ -7,21 +8,23 @@
         </trust-anchors>
     </base-config>
     
-    <!-- Domain-specific configurations for your LiveKit deployment -->
+    <!-- Domain-specific configurations for LiveKit -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">livekit.ozzu.world</domain>
         <domain includeSubdomains="true">api.ozzu.world</domain>
         <domain includeSubdomains="true">ozzu.world</domain>
         <domain includeSubdomains="true">34.59.178.219</domain>
+        <!-- Development/testing domains -->
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
         <trust-anchors>
             <certificates src="system" />
             <certificates src="user" />
         </trust-anchors>
     </domain-config>
     
-    <!-- Debug overrides for development -->
+    <!-- Debug overrides for development builds -->
     <debug-overrides>
         <trust-anchors>
             <certificates src="system" />
