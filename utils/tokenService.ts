@@ -1,29 +1,37 @@
 export interface TokenRequest {
-  room: string;
-  identity: string;
+  roomName: string;
+  participantName: string;
+  metadata?: string;
 }
 
 export interface TokenResponse {
   token: string;
+  roomName: string;
+  participantName: string;
+  livekitUrl: string;
 }
 
 export class TokenService {
   private static readonly BASE_URL = 'https://api.ozzu.world';
   private static readonly TOKEN_ENDPOINT = '/livekit/token';
 
-  static async fetchToken(room: string, identity: string): Promise<string> {
-    if (!room.trim()) {
+  static async fetchToken(roomName: string, participantName: string, metadata?: string): Promise<TokenResponse> {
+    if (!roomName.trim()) {
       throw new Error('Room name is required');
     }
     
-    if (!identity.trim()) {
-      throw new Error('Identity is required');
+    if (!participantName.trim()) {
+      throw new Error('Participant name is required');
     }
 
     const requestBody: TokenRequest = {
-      room: room.trim(),
-      identity: identity.trim()
+      roomName: roomName.trim(),
+      participantName: participantName.trim()
     };
+
+    if (metadata) {
+      requestBody.metadata = metadata;
+    }
 
     console.log('Fetching token for:', requestBody);
 
@@ -33,6 +41,8 @@ export class TokenService {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
+          // Add authentication header if needed
+          // 'Authorization': `Bearer ${userToken}`
         },
         body: JSON.stringify(requestBody)
       });
@@ -49,7 +59,8 @@ export class TokenService {
       }
 
       console.log('Token received successfully');
-      return data.token;
+      console.log('LiveKit URL:', data.livekitUrl);
+      return data;
     } catch (error) {
       if (error instanceof Error) {
         console.error('Token fetch error:', error.message);
@@ -65,14 +76,18 @@ export class TokenService {
     return roomNameRegex.test(roomName) && roomName.length >= 1 && roomName.length <= 50;
   }
 
-  static validateIdentity(identity: string): boolean {
-    // Identity should be alphanumeric with dashes/underscores
-    const identityRegex = /^[a-zA-Z0-9_-]+$/;
-    return identityRegex.test(identity) && identity.length >= 1 && identity.length <= 50;
+  static validateParticipantName(participantName: string): boolean {
+    // Participant name should be alphanumeric with dashes/underscores
+    const participantNameRegex = /^[a-zA-Z0-9_-]+$/;
+    return participantNameRegex.test(participantName) && participantName.length >= 1 && participantName.length <= 50;
   }
 
-  static generateRandomIdentity(): string {
+  static generateRandomParticipantName(): string {
     return `user-${Math.floor(Math.random() * 10000)}`;
+  }
+
+  static getWebSocketUrl(): string {
+    return 'wss://livekit.ozzu.world';
   }
 }
 
