@@ -1,35 +1,26 @@
-import React, { useEffect, useState, useCallback } from 'react';
+// SIMPLIFIED AUDIO-ONLY VERSION FOR TESTING
+// This removes video to isolate connection issues
+
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
-  FlatList,
-  ListRenderItem,
   Button,
   TextInput,
   Text,
   Alert,
-  Dimensions,
   PermissionsAndroid,
   Platform,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import {
-  AudioSession,
-  useTracks,
-  TrackReferenceOrPlaceholder,
-  VideoTrack,
-  isTrackReference,
-  useRoom,
-  useLocalParticipant,
-  RoomEvent,
-} from '@livekit/react-native';
-import { Track, Room, RoomOptions, ConnectionError } from 'livekit-client';
+import { AudioSession } from '@livekit/react-native';
+import { Room, RoomOptions, RoomEvent, LogLevel, setLogLevel } from 'livekit-client';
 import { StatusBar } from 'expo-status-bar';
 import TokenService from './utils/tokenService';
 
-// NOTE: registerGlobals is called in index.ts
+setLogLevel(LogLevel.debug);
 
-async function ensureMediaPermissions(): Promise<boolean> {
+async function ensureAudioPermission(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
 
   try {
@@ -37,32 +28,12 @@ async function ensureMediaPermissions(): Promise<boolean> {
       PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
       {
         title: 'Microphone Permission',
-        message: 'LiveKit needs access to your microphone for voice.',
+        message: 'LiveKit needs access to your microphone.',
         buttonPositive: 'OK',
       }
     );
 
-    const cam = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.CAMERA,
-      {
-        title: 'Camera Permission',
-        message: 'LiveKit needs access to your camera for video.',
-        buttonPositive: 'OK',
-      }
-    );
-
-    const granted =
-      mic === PermissionsAndroid.RESULTS.GRANTED &&
-      cam === PermissionsAndroid.RESULTS.GRANTED;
-
-    if (!granted) {
-      Alert.alert(
-        'Permissions required',
-        'Please allow microphone and camera permissions to publish media. You can still join without media.'
-      );
-    }
-
-    return granted;
+    return mic === PermissionsAndroid.RESULTS.GRANTED;
   } catch (e) {
     console.error('Permission request failed:', e);
     return false;
@@ -72,344 +43,266 @@ async function ensureMediaPermissions(): Promise<boolean> {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <LiveKitApp />
+      <AudioOnlyTest />
     </SafeAreaProvider>
   );
 }
 
-function LiveKitApp() {
+function AudioOnlyTest() {
   const [room, setRoom] = useState<Room | null>(null);
-  const [token, setToken] = useState('');
-  const [livekitUrl, setLivekitUrl] = useState('');
-  const [roomName, setRoomName] = useState('default-room');
+  const [roomName, setRoomName] = useState('test-audio-room');
   const [participantName, setParticipantName] = useState(`user-${Math.floor(Math.random() * 1000)}`);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [publishOnJoin, setPublishOnJoin] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [statusMessages, setStatusMessages] = useState<string[]>([]);
+  
+  const isConnecting = useRef(false);
 
-  // Create room instance once
+  const addStatus = useCallback((msg: string) => {
+    console.log(msg);
+    setStatusMessages(prev => [...prev.slice(-9), `${new Date().toLocaleTimeString()}: ${msg}`]);
+  }, []);
+
   useEffect(() => {
+    addStatus('🔧 Creating Room (audio-only mode)...');
+    
     const roomInstance = new Room({
-      adaptiveStream: { pixelDensity: 'screen' },
+      // AUDIO ONLY - No video
       publishDefaults: {
-        audio: publishOnJoin,
-        video: publishOnJoin,
-        audioPreset: { maxBitrate: 20_000 },
+        audio: true,
+        video: false, // Disabled for testing
       },
     } as RoomOptions);
 
-    // Set up event listeners IMMEDIATELY after room creation
+    // Event listeners
+    roomInstance.on(RoomEvent.SignalConnected, () => {
+      addStatus('📶 Signal connected!');
+    });
+
     roomInstance.on(RoomEvent.Connected, () => {
-      console.log('✅ Successfully connected to LiveKit room!');
+      addStatus('✅ Room connected!');
       setConnectionError(null);
       setConnected(true);
+      isConnecting.current = false;
     });
 
     roomInstance.on(RoomEvent.Disconnected, (reason) => {
-      console.log('❌ Disconnected from room:', reason);
-      
-      // Don't show alert for user-initiated disconnect
-      if (reason && !reason.toString().includes('Client initiated')) {
-        Alert.alert('Disconnected', `Connection lost: ${reason || 'Unknown reason'}`);
-      }
-      
+      addStatus(`❌ Disconnected: ${reason}`);
       setConnected(false);
+      isConnecting.current = false;
+    });
+
+    roomInstance.on(RoomEvent.Reconnecting, () => {
+      addStatus('🔄 Reconnecting...');
+    });
+
+    roomInstance.on(RoomEvent.ConnectionStateChanged, (state) => {
+      addStatus(`📡 Connection state: ${state}`);
+    });
+
+    roomInstance.on(RoomEvent.ConnectionError, (error) => {
+      addStatus(`🔥 Connection error: ${error.message}`);
+      setConnectionError(error.message);
+      isConnecting.current = false;
     });
 
     roomInstance.on(RoomEvent.ParticipantConnected, (participant) => {
-      console.log('👋 Participant joined:', participant.identity);
-    });
-
-    roomInstance.on(RoomEvent.ParticipantDisconnected, (participant) => {
-      console.log('👋 Participant left:', participant.identity);
-    });
-
-    // Handle connection errors
-    roomInstance.on(RoomEvent.ConnectionError, (error) => {
-      console.error('🔥 Connection error:', error);
-      const errorMessage = error instanceof ConnectionError 
-        ? `Connection failed: ${error.message}` 
-        : `Connection error: ${error}`;
-      
-      setConnectionError(errorMessage);
-      Alert.alert('Connection Error', errorMessage);
-      setConnected(false);
+      addStatus(`👋 Participant joined: ${participant.identity}`);
     });
 
     setRoom(roomInstance);
+    addStatus('✅ Room instance ready');
 
     return () => {
       if (roomInstance.state === 'connected') {
         roomInstance.disconnect();
       }
     };
-  }, []);
+  }, [addStatus]);
 
   const connectToRoom = useCallback(async () => {
-    if (!room) {
-      console.error('Room not initialized');
+    if (!room || isConnecting.current) {
+      addStatus('⚠️ Room not ready or already connecting');
       return;
     }
 
-    // Reset previous connection errors
+    isConnecting.current = true;
     setConnectionError(null);
     setLoading(true);
+    setStatusMessages([]);
 
     try {
-      // Ask for permissions first
-      const granted = await ensureMediaPermissions();
-      setPublishOnJoin(granted);
-
-      if (!TokenService.validateRoomName(roomName)) {
-        Alert.alert('Error', 'Room name must be alphanumeric with dashes/underscores only');
-        return;
+      addStatus('🚀 Starting connection...');
+      
+      addStatus('📋 Requesting microphone permission...');
+      const granted = await ensureAudioPermission();
+      if (!granted) {
+        throw new Error('Microphone permission required');
       }
+      addStatus('✅ Permission granted');
 
-      if (!TokenService.validateParticipantName(participantName)) {
-        Alert.alert('Error', 'Participant name must be alphanumeric with dashes/underscores only');
-        return;
-      }
-
-      console.log('Fetching token for:', { roomName, participantName });
+      addStatus(`🔑 Fetching token for room: ${roomName}`);
       const response = await TokenService.fetchToken(roomName, participantName);
+      addStatus('✅ Token received');
 
-      const baseWs = (response.livekitUrl || TokenService.getWebSocketUrl()).replace(/\/$/, '');
-      const rtcUrl = `${baseWs}`; // Don't add /rtc suffix
+      const wsUrl = response.livekitUrl || TokenService.getWebSocketUrl();
+      addStatus(`🌐 Connecting to: ${wsUrl}`);
+      addStatus(`📊 Room state: ${room.state}`);
 
-      console.log('Token received successfully');
-      console.log('LiveKit URL:', response.livekitUrl);
-      console.log('Connecting to:', rtcUrl);
-
-      setToken(response.token);
-      setLivekitUrl(rtcUrl);
-
-      // Connect to the room
-      await room.connect(rtcUrl, response.token, {
+      // Connect with explicit ICE config
+      addStatus('⏳ Calling room.connect()...');
+      await room.connect(wsUrl, response.token, {
         autoSubscribe: true,
-        maxRetries: 3,
-        retryDelays: [1000, 3000, 5000],
+        rtcConfig: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+          ],
+          iceTransportPolicy: 'all',
+        },
       });
-
-      console.log('🎉 Room connection initiated!');
+      
+      addStatus('🎉 Connect call completed');
+      addStatus(`📊 Final state: ${room.state}`);
 
     } catch (error: any) {
-      console.error('Connection failed:', error);
-      const errorMessage = error.message || 'Unknown error occurred';
-      setConnectionError(errorMessage);
-      Alert.alert('Connection Error', `Failed to connect: ${errorMessage}`);
-      setConnected(false);
+      addStatus(`💥 Error: ${error.message}`);
+      setConnectionError(error.message);
+      Alert.alert('Connection Error', error.message);
+      isConnecting.current = false;
     } finally {
       setLoading(false);
     }
-  }, [room, roomName, participantName, publishOnJoin]);
+  }, [room, roomName, participantName, addStatus]);
 
   const disconnect = useCallback(() => {
-    console.log('User initiated disconnect');
+    addStatus('🔌 Disconnecting...');
     if (room && room.state === 'connected') {
       room.disconnect();
     }
     setConnected(false);
-    setToken('');
-    setLivekitUrl('');
     setConnectionError(null);
-  }, [room]);
+    isConnecting.current = false;
+  }, [room, addStatus]);
 
   useEffect(() => {
     const start = async () => {
       try {
+        addStatus('🎵 Starting audio session...');
         await AudioSession.startAudioSession();
-        console.log('Audio session started');
-      } catch (error) {
-        console.error('Failed to start audio session:', error);
+        addStatus('✅ Audio session started');
+      } catch (error: any) {
+        addStatus(`❌ Audio session error: ${error.message}`);
       }
     };
     start();
     return () => {
       AudioSession.stopAudioSession();
     };
-  }, []);
-
-  if (!connected) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
-        <StatusBar style="auto" />
-        <View style={styles.loginContainer}>
-          <Text style={styles.title}>LiveKit Voice Chat</Text>
-          <Text style={styles.subtitle}>June Platform - api.ozzu.world</Text>
-
-          <TextInput
-            style={styles.input}
-            placeholder="Room Name (alphanumeric, -, _)"
-            value={roomName}
-            onChangeText={setRoomName}
-            autoCapitalize="none"
-          />
-
-          <TextInput
-            style={styles.input}
-            placeholder="Your Name (alphanumeric, -, _)"
-            value={participantName}
-            onChangeText={setParticipantName}
-            autoCapitalize="none"
-          />
-
-          <Button
-            title={loading ? 'Connecting to June...' : 'Join Room'}
-            onPress={connectToRoom}
-            disabled={loading || !room}
-          />
-
-          {connectionError && (
-            <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>Connection Error:</Text>
-              <Text style={styles.errorDetails}>{connectionError}</Text>
-            </View>
-          )}
-
-          {__DEV__ && (
-            <View style={styles.debugInfo}>
-              <Text style={styles.debugText}>Debug Info:</Text>
-              <Text style={styles.debugText}>Token URL: https://api.ozzu.world/livekit/token</Text>
-              <Text style={styles.debugText}>WebSocket Base: wss://livekit.ozzu.world</Text>
-              <Text style={styles.debugText}>Room State: {room?.state || 'Not initialized'}</Text>
-              <Text style={styles.debugText}>Client Will Connect To: {livekitUrl || 'N/A (not connected yet)'}</Text>
-            </View>
-          )}
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!room) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Initializing room...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  }, [addStatus]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
-      <StatusBar style="light" />
-      <RoomView room={room} roomName={roomName} onDisconnect={disconnect} />
+      <StatusBar style="auto" />
+      <View style={styles.content}>
+        <Text style={styles.title}>Audio-Only Connection Test</Text>
+        <Text style={styles.subtitle}>Simplified for debugging</Text>
+
+        {!connected && (
+          <>
+            <TextInput
+              style={styles.input}
+              placeholder="Room Name"
+              value={roomName}
+              onChangeText={setRoomName}
+              autoCapitalize="none"
+            />
+
+            <TextInput
+              style={styles.input}
+              placeholder="Your Name"
+              value={participantName}
+              onChangeText={setParticipantName}
+              autoCapitalize="none"
+            />
+
+            <Button
+              title={loading ? 'Connecting...' : 'Connect (Audio Only)'}
+              onPress={connectToRoom}
+              disabled={loading || !room}
+            />
+
+            {connectionError && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>Error:</Text>
+                <Text style={styles.errorDetails}>{connectionError}</Text>
+              </View>
+            )}
+          </>
+        )}
+
+        {connected && (
+          <View style={styles.connectedContainer}>
+            <Text style={styles.connectedText}>✅ Connected to Room!</Text>
+            <Text style={styles.infoText}>Room: {roomName}</Text>
+            <Text style={styles.infoText}>Participants: {room?.remoteParticipants?.size || 0 + 1}</Text>
+            <Button title="Disconnect" onPress={disconnect} color="#FF3B30" />
+          </View>
+        )}
+
+        <View style={styles.statusContainer}>
+          <Text style={styles.statusTitle}>Connection Log:</Text>
+          {statusMessages.map((msg, i) => (
+            <Text key={i} style={styles.statusText}>{msg}</Text>
+          ))}
+        </View>
+      </View>
     </SafeAreaView>
   );
 }
 
-const RoomView = ({ room, roomName, onDisconnect }: { room: Room; roomName: string; onDisconnect: () => void }) => {
-  const tracks = useTracks([
-    { source: Track.Source.Camera, withPlaceholder: true },
-    { source: Track.Source.ScreenShare, withPlaceholder: false },
-  ], { room });
-
-  const [isMicEnabled, setIsMicEnabled] = useState(true);
-  const [isCameraEnabled, setIsCameraEnabled] = useState(true);
-
-  const localParticipant = room.localParticipant;
-
-  const toggleMicrophone = async () => {
-    try {
-      await localParticipant.setMicrophoneEnabled(!isMicEnabled);
-      setIsMicEnabled(!isMicEnabled);
-      console.log('🎤 Microphone toggled:', !isMicEnabled);
-    } catch (error) {
-      console.error('❌ Failed to toggle microphone:', error);
-    }
-  };
-
-  const toggleCamera = async () => {
-    try {
-      await localParticipant.setCameraEnabled(!isCameraEnabled);
-      setIsCameraEnabled(!isCameraEnabled);
-      console.log('📹 Camera toggled:', !isCameraEnabled);
-    } catch (error) {
-      console.error('❌ Failed to toggle camera:', error);
-    }
-  };
-
-  const renderTrack: ListRenderItem<TrackReferenceOrPlaceholder> = ({ item }) => {
-    if (isTrackReference(item)) {
-      return (
-        <View style={styles.participantContainer}>
-          <VideoTrack trackRef={item} style={styles.participantView} objectFit="cover" />
-          <Text style={styles.participantName}>
-            {item.participant?.identity || 'Unknown'}
-            {item.participant === localParticipant && ' (You)'}
-          </Text>
-        </View>
-      );
-    }
-    return (
-      <View style={[styles.participantView, styles.placeholderView]}>
-        <Text style={styles.placeholderText}>No Video</Text>
-      </View>
-    );
-  };
-
-  if (!room || room.state !== 'connected') {
-    return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Connecting to room... ({room?.state || 'unknown'})</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.roomContainer}>
-      <View style={styles.header}>
-        <Text style={styles.roomTitle}>Room: {roomName}</Text>
-        <Text style={styles.participantCount}>
-          {Array.from(room.remoteParticipants.values()).length + 1} participant(s)
-        </Text>
-        <Text style={styles.connectionStatus}>Connected to June Platform ✅</Text>
-      </View>
-
-      <FlatList
-        data={tracks}
-        renderItem={renderTrack}
-        keyExtractor={(item, index) => (isTrackReference(item) ? `${item.participant?.sid}-${item.publication?.trackSid}` : `placeholder-${index}`)}
-        numColumns={2}
-        contentContainerStyle={styles.tracksContainer}
-      />
-
-      <View style={styles.controls}>
-        <Button title={isMicEnabled ? '🎤 Mute' : '🎤 Unmute'} onPress={toggleMicrophone} color={isMicEnabled ? '#007AFF' : '#FF3B30'} />
-        <Button title={isCameraEnabled ? '📹 Stop Video' : '📹 Start Video'} onPress={toggleCamera} color={isCameraEnabled ? '#007AFF' : '#FF3B30'} />
-        <Button title="Leave" onPress={onDisconnect} color="#FF3B30" />
-      </View>
-    </View>
-  );
-};
-
-const { width } = Dimensions.get('window');
-const participantWidth = (width - 30) / 2;
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  loginContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#f5f5f5' },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#333', marginBottom: 8 },
-  subtitle: { fontSize: 16, color: '#666', marginBottom: 30 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 15, marginBottom: 15, width: '100%', backgroundColor: '#fff', fontSize: 16 },
-  errorContainer: { marginTop: 15, padding: 15, backgroundColor: '#ffebee', borderRadius: 8, width: '100%', borderLeftWidth: 4, borderLeftColor: '#f44336' },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  content: { flex: 1, padding: 20 },
+  title: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 4, textAlign: 'center' },
+  subtitle: { fontSize: 14, color: '#666', marginBottom: 20, textAlign: 'center' },
+  input: { 
+    borderWidth: 1, 
+    borderColor: '#ddd', 
+    borderRadius: 8, 
+    padding: 15, 
+    marginBottom: 15, 
+    backgroundColor: '#fff', 
+    fontSize: 16 
+  },
+  errorContainer: { 
+    marginTop: 15, 
+    padding: 15, 
+    backgroundColor: '#ffebee', 
+    borderRadius: 8, 
+    borderLeftWidth: 4, 
+    borderLeftColor: '#f44336' 
+  },
   errorText: { fontSize: 14, fontWeight: 'bold', color: '#c62828', marginBottom: 5 },
   errorDetails: { fontSize: 13, color: '#d32f2f' },
-  debugInfo: { marginTop: 20, padding: 10, backgroundColor: '#e8e8e8', borderRadius: 5, width: '100%' },
-  debugText: { fontSize: 12, color: '#666', marginBottom: 2 },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' },
-  loadingText: { color: '#fff', fontSize: 16 },
-  roomContainer: { flex: 1, backgroundColor: '#000' },
-  header: { padding: 15, backgroundColor: '#1a1a1a', borderBottomWidth: 1, borderBottomColor: '#333' },
-  roomTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
-  participantCount: { fontSize: 14, color: '#ccc', marginTop: 4 },
-  connectionStatus: { fontSize: 12, color: '#4CAF50', marginTop: 2 },
-  tracksContainer: { padding: 10, flexGrow: 1 },
-  participantContainer: { margin: 5 },
-  participantView: { width: participantWidth, height: participantWidth * 0.75, borderRadius: 8, overflow: 'hidden' },
-  participantName: { color: '#fff', fontSize: 12, textAlign: 'center', marginTop: 5, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
-  placeholderView: { backgroundColor: '#333', justifyContent: 'center', alignItems: 'center' },
-  placeholderText: { color: '#666', fontSize: 14 },
-  controls: { flexDirection: 'row', justifyContent: 'space-around', padding: 20, backgroundColor: '#1a1a1a', borderTopWidth: 1, borderTopColor: '#333' },
+  connectedContainer: {
+    padding: 20,
+    backgroundColor: '#e8f5e9',
+    borderRadius: 8,
+    marginBottom: 20,
+  },
+  connectedText: { fontSize: 18, fontWeight: 'bold', color: '#2e7d32', marginBottom: 10 },
+  infoText: { fontSize: 14, color: '#555', marginBottom: 5 },
+  statusContainer: { 
+    flex: 1,
+    marginTop: 20, 
+    padding: 15, 
+    backgroundColor: '#fff', 
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  statusTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 10, color: '#333' },
+  statusText: { fontSize: 11, color: '#666', marginBottom: 3, fontFamily: 'monospace' },
 });
