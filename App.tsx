@@ -21,7 +21,7 @@ import {
   isTrackReference,
   useRoomContext,
 } from '@livekit/react-native';
-import { Track, RoomEvent, setLogExtension } from 'livekit-client';
+import { Track, RoomEvent, setLogExtension, Room } from 'livekit-client';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import TokenService from './utils/tokenService';
@@ -170,6 +170,40 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
 
     console.log('🔧 Setting up room event listeners...');
     console.log('📊 Initial room state:', room.state);
+    
+    // DEEP DEBUG: Access the engine directly
+    if ((room as any).engine) {
+      const engine = (room as any).engine;
+      console.log('🛠️ ENGINE DEBUG: Engine found:', typeof engine);
+      
+      // Monitor WebSocket connection attempts
+      if (engine.signalClient) {
+        console.log('📡 ENGINE DEBUG: SignalClient found');
+        
+        // Override WebSocket creation to log attempts
+        const originalConnect = engine.signalClient.connect?.bind(engine.signalClient);
+        if (originalConnect) {
+          engine.signalClient.connect = async (...args: any[]) => {
+            console.log('🌐 ENGINE DEBUG: SignalClient.connect() called with:', args);
+            try {
+              const result = await originalConnect(...args);
+              console.log('✅ ENGINE DEBUG: SignalClient.connect() succeeded');
+              return result;
+            } catch (error) {
+              console.error('❌ ENGINE DEBUG: SignalClient.connect() failed:', error);
+              throw error;
+            }
+          };
+        }
+      }
+      
+      // Monitor all engine events
+      if (engine.on) {
+        engine.on('*', (eventName: string, ...args: any[]) => {
+          console.log(`🔧 ENGINE EVENT: ${eventName}`, args);
+        });
+      }
+    }
 
     const handleConnected = () => {
       console.log('🎉 ANDROID: Room Connected event fired!');
