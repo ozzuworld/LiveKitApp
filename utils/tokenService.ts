@@ -48,7 +48,7 @@ export class TokenService {
   }
 
   static getWebSocketUrl(): string {
-    return 'wss://livekit.ozzu.world';
+    return 'wss://34.59.178.219:7880';
   }
 }
 
