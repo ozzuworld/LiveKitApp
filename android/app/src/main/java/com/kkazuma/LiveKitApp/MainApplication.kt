@@ -16,6 +16,10 @@ import com.facebook.react.defaults.DefaultReactNativeHost
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
 
+// LiveKit native initialization imports
+import com.livekit.reactnative.LiveKitReactNative
+import com.livekit.reactnative.audio.AudioType
+
 class MainApplication : Application(), ReactApplication {
 
   override val reactNativeHost: ReactNativeHost = ReactNativeHostWrapper(
@@ -23,8 +27,7 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Packages that cannot be autolinked yet can be added manually here, for example:
-              // add(MyReactNativePackage())
+              // Packages that cannot be autolinked yet can be added manually here.
             }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
@@ -40,6 +43,10 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+
+    // REQUIRED: Initialize LiveKit native module and audio category before RN loads
+    LiveKitReactNative.setup(this, AudioType.CommunicationAudioType())
+
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {
