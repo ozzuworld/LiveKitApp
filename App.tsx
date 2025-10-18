@@ -24,7 +24,7 @@ import {
   useLocalParticipant,
   RoomEvent,
 } from '@livekit/react-native';
-import { Track, RoomConnectOptions, RoomOptions } from 'livekit-client';
+import { Track, RoomConnectOptions, RoomOptions, ConnectionError } from 'livekit-client';
 import { StatusBar } from 'expo-status-bar';
 import TokenService from './utils/tokenService';
 
@@ -86,8 +86,12 @@ function LiveKitApp() {
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [publishOnJoin, setPublishOnJoin] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const joinRoom = async () => {
+    // Reset previous connection errors
+    setConnectionError(null);
+    
     // Ask for permissions first; if denied, join signaling-only
     const granted = await ensureMediaPermissions();
     setPublishOnJoin(granted);
@@ -122,16 +126,20 @@ function LiveKitApp() {
       setConnected(true);
     } catch (error: any) {
       console.error('Token fetch failed:', error);
-      Alert.alert('Connection Error', `Failed to get token: ${error.message}`);
+      const errorMessage = error.message || 'Unknown error occurred';
+      setConnectionError(errorMessage);
+      Alert.alert('Connection Error', `Failed to get token: ${errorMessage}`);
     } finally {
       setLoading(false);
     }
   };
 
   const disconnect = () => {
+    console.log('User initiated disconnect');
     setConnected(false);
     setToken('');
     setLivekitUrl('');
+    setConnectionError(null);
   };
 
   useEffect(() => {
@@ -179,6 +187,13 @@ function LiveKitApp() {
             disabled={loading}
           />
 
+          {connectionError && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>Connection Error:</Text>
+              <Text style={styles.errorDetails}>{connectionError}</Text>
+            </View>
+          )}
+
           {__DEV__ && (
             <View style={styles.debugInfo}>
               <Text style={styles.debugText}>Debug Info:</Text>
@@ -207,18 +222,37 @@ function LiveKitApp() {
             audioPreset: { maxBitrate: 20_000 },
           },
         } as RoomOptions}
-        connectOptions={{ autoSubscribe: true } as RoomConnectOptions}
+        connectOptions={{ 
+          autoSubscribe: true,
+          maxRetries: 3,
+          retryDelays: [1000, 3000, 5000],
+        } as RoomConnectOptions}
         audio={publishOnJoin}
         video={publishOnJoin}
         onConnected={() => {
           console.log('✅ Successfully connected to LiveKit room!');
+          setConnectionError(null);
         }}
         onDisconnected={(reason) => {
           console.log('❌ Disconnected from room:', reason);
-          Alert.alert('Disconnected', `Connection lost: ${reason || 'Unknown reason'}`);
+          
+          // Don't show alert for user-initiated disconnect
+          if (reason && !reason.toString().includes('Client initiated')) {
+            Alert.alert('Disconnected', `Connection lost: ${reason || 'Unknown reason'}`);
+          }
+          
           setConnected(false);
           setToken('');
           setLivekitUrl('');
+        }}
+        onConnectionError={(error) => {
+          console.error('❌ Connection error:', error);
+          const errorMessage = error instanceof ConnectionError 
+            ? `Connection failed: ${error.message}` 
+            : `Connection error: ${error}`;
+          
+          setConnectionError(errorMessage);
+          Alert.alert('Connection Error', errorMessage);
         }}
       >
         <RoomView roomName={roomName} onDisconnect={disconnect} />
@@ -259,16 +293,29 @@ const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: 
       console.log('💔 Room disconnected:', reason);
     };
 
+    const handleConnectionError = (error: any) => {
+      console.error('❌ Room connection error:', error);
+    };
+
     room.on(RoomEvent.Connected, handleConnected);
     room.on(RoomEvent.ParticipantConnected, handleParticipantConnected);
     room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
     room.on(RoomEvent.Disconnected, handleDisconnected);
+    
+    // Add error event listener if available
+    if (RoomEvent.ConnectionError) {
+      room.on(RoomEvent.ConnectionError, handleConnectionError);
+    }
 
     return () => {
       room.off(RoomEvent.Connected, handleConnected);
       room.off(RoomEvent.ParticipantConnected, handleParticipantConnected);
       room.off(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
       room.off(RoomEvent.Disconnected, handleDisconnected);
+      
+      if (RoomEvent.ConnectionError) {
+        room.off(RoomEvent.ConnectionError, handleConnectionError);
+      }
     };
   }, [room, localParticipant]);
 
@@ -355,6 +402,9 @@ const styles = StyleSheet.create({
   title: { fontSize: 28, fontWeight: 'bold', color: '#333', marginBottom: 8 },
   subtitle: { fontSize: 16, color: '#666', marginBottom: 30 },
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 15, marginBottom: 15, width: '100%', backgroundColor: '#fff', fontSize: 16 },
+  errorContainer: { marginTop: 15, padding: 15, backgroundColor: '#ffebee', borderRadius: 8, width: '100%', borderLeftWidth: 4, borderLeftColor: '#f44336' },
+  errorText: { fontSize: 14, fontWeight: 'bold', color: '#c62828', marginBottom: 5 },
+  errorDetails: { fontSize: 13, color: '#d32f2f' },
   debugInfo: { marginTop: 20, padding: 10, backgroundColor: '#e8e8e8', borderRadius: 5, width: '100%' },
   debugText: { fontSize: 12, color: '#666', marginBottom: 2 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' },
