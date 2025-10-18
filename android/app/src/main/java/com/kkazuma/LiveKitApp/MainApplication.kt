@@ -16,7 +16,6 @@ import com.facebook.react.defaults.DefaultReactNativeHost
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
 
-// LiveKit native initialization imports
 import com.livekit.reactnative.LiveKitReactNative
 import com.livekit.reactnative.audio.AudioType
 
@@ -44,7 +43,7 @@ class MainApplication : Application(), ReactApplication {
   override fun onCreate() {
     super.onCreate()
 
-    // REQUIRED: Initialize LiveKit native module and audio category before RN loads
+    // CRITICAL: Initialize LiveKit BEFORE any React Native initialization
     LiveKitReactNative.setup(this, AudioType.CommunicationAudioType())
 
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
