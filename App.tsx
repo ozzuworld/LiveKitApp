@@ -25,49 +25,45 @@ import {
 } from '@livekit/react-native';
 import { Track, Room } from 'livekit-client';
 import { StatusBar } from 'expo-status-bar';
+import TokenService from './utils/tokenService';
 
 // Initialize LiveKit globals
 registerGlobals();
 
-const wsURL = "wss://api.ozzu.world"; // Your WebSocket URL
-
 export default function App() {
   const [token, setToken] = useState("");
+  const [livekitUrl, setLivekitUrl] = useState("");
   const [roomName, setRoomName] = useState("default-room");
-  const [identity, setIdentity] = useState(`user-${Math.floor(Math.random() * 1000)}`);
+  const [participantName, setParticipantName] = useState(`user-${Math.floor(Math.random() * 1000)}`);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const fetchToken = async () => {
-    if (!roomName.trim() || !identity.trim()) {
-      Alert.alert('Error', 'Please enter both room name and your name');
+    if (!TokenService.validateRoomName(roomName)) {
+      Alert.alert('Error', 'Room name must be alphanumeric with dashes/underscores only');
+      return;
+    }
+
+    if (!TokenService.validateParticipantName(participantName)) {
+      Alert.alert('Error', 'Participant name must be alphanumeric with dashes/underscores only');
       return;
     }
 
     setLoading(true);
     try {
-      console.log('Fetching token for:', { room: roomName, identity });
+      console.log('Fetching token for:', { roomName, participantName });
       
-      const response = await fetch('https://api.ozzu.world/livekit/token', {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          room: roomName,
-          identity: identity
-        })
+      const response = await TokenService.fetchToken(roomName, participantName);
+      
+      console.log('Token response:', {
+        hasToken: !!response.token,
+        roomName: response.roomName,
+        participantName: response.participantName,
+        livekitUrl: response.livekitUrl
       });
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log('Token received successfully');
-      
-      setToken(data.token);
+      setToken(response.token);
+      setLivekitUrl(response.livekitUrl || TokenService.getWebSocketUrl());
       setConnected(true);
     } catch (error) {
       console.error('Failed to fetch token:', error);
@@ -80,6 +76,7 @@ export default function App() {
   const disconnect = () => {
     setConnected(false);
     setToken("");
+    setLivekitUrl("");
   };
 
   // Start audio session
@@ -105,11 +102,11 @@ export default function App() {
         <StatusBar style="auto" />
         <View style={styles.loginContainer}>
           <Text style={styles.title}>LiveKit Voice Chat</Text>
-          <Text style={styles.subtitle}>Connect to api.ozzu.world</Text>
+          <Text style={styles.subtitle}>June Platform - api.ozzu.world</Text>
           
           <TextInput
             style={styles.input}
-            placeholder="Room Name"
+            placeholder="Room Name (alphanumeric, -, _)"
             value={roomName}
             onChangeText={setRoomName}
             autoCapitalize="none"
@@ -117,17 +114,25 @@ export default function App() {
           
           <TextInput
             style={styles.input}
-            placeholder="Your Name"
-            value={identity}
-            onChangeText={setIdentity}
+            placeholder="Your Name (alphanumeric, -, _)"
+            value={participantName}
+            onChangeText={setParticipantName}
             autoCapitalize="none"
           />
           
           <Button
-            title={loading ? "Connecting..." : "Join Room"}
+            title={loading ? "Connecting to June..." : "Join Room"}
             onPress={fetchToken}
             disabled={loading}
           />
+          
+          {__DEV__ && (
+            <View style={styles.debugInfo}>
+              <Text style={styles.debugText}>Debug Info:</Text>
+              <Text style={styles.debugText}>Token URL: https://api.ozzu.world/livekit/token</Text>
+              <Text style={styles.debugText}>WebSocket: wss://livekit.ozzu.world</Text>
+            </View>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -137,7 +142,7 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
       <LiveKitRoom
-        serverUrl={wsURL}
+        serverUrl={livekitUrl}
         token={token}
         connect={true}
         options={{
@@ -154,6 +159,7 @@ export default function App() {
           console.log('Disconnected from room:', reason);
           setConnected(false);
           setToken("");
+          setLivekitUrl("");
         }}
       >
         <RoomView roomName={roomName} onDisconnect={disconnect} />
@@ -178,10 +184,15 @@ const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: 
       console.log('Room event:', event);
     };
 
-    room.on(RoomEvent.Connected, () => console.log('Connected to room'));
+    room.on(RoomEvent.Connected, () => {
+      console.log('Connected to room successfully');
+      console.log('Room participants:', room.numParticipants);
+    });
+    
     room.on(RoomEvent.ParticipantConnected, (participant) => {
       console.log('Participant connected:', participant.identity);
     });
+    
     room.on(RoomEvent.ParticipantDisconnected, (participant) => {
       console.log('Participant disconnected:', participant.identity);
     });
@@ -232,6 +243,7 @@ const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: 
         <Text style={styles.participantCount}>
           {room.numParticipants} participant{room.numParticipants !== 1 ? 's' : ''}
         </Text>
+        <Text style={styles.connectionStatus}>Connected to June Platform</Text>
       </View>
       
       <FlatList
@@ -304,6 +316,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     fontSize: 16,
   },
+  debugInfo: {
+    marginTop: 20,
+    padding: 10,
+    backgroundColor: '#e8e8e8',
+    borderRadius: 5,
+    width: '100%',
+  },
+  debugText: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 2,
+  },
   roomContainer: {
     flex: 1,
     backgroundColor: '#000',
@@ -323,6 +347,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#ccc',
     marginTop: 4,
+  },
+  connectionStatus: {
+    fontSize: 12,
+    color: '#4CAF50',
+    marginTop: 2,
   },
   tracksContainer: {
     padding: 10,
