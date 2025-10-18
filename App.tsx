@@ -21,10 +21,13 @@ import {
   isTrackReference,
   useRoomContext,
 } from '@livekit/react-native';
-import { Track, RoomEvent } from 'livekit-client';
+import { Track, RoomEvent, setLogExtension } from 'livekit-client';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import TokenService from './utils/tokenService';
+
+// Route livekit-client internal logs to RN console for debug
+setLogExtension({ logger: console });
 
 export default function App() {
   const [token, setToken] = useState<string>('');
@@ -74,9 +77,8 @@ export default function App() {
       setUrl(finalUrl);
       setShouldConnect(true);
       
-      // Set timeout to detect hanging connections
       const timeout = setTimeout(() => {
-        console.log('⚠️ CONNECTION TAKING TOO LONG - Check server status!');
+        console.log('⏳ Signal watchdog: no connection after 15s');
       }, 15000);
       setConnectionTimeout(timeout);
       
@@ -133,13 +135,12 @@ export default function App() {
       connect={true}
       options={{
         adaptiveStream: { pixelDensity: 'screen' },
-        // Add ICE server configuration for better Android connectivity
         rtcConfig: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-          ]
-        }
+          ],
+        },
       }}
       audio={true}
       video={false}
@@ -215,13 +216,18 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
     room.on(RoomEvent.Reconnecting, handleReconnecting);
     room.on(RoomEvent.Reconnected, handleReconnected);
     room.on(RoomEvent.ConnectionQualityChanged, handleConnectionQualityChanged);
-    
-    // @ts-ignore - ConnectionError might not be in the type definitions
-    if (RoomEvent.ConnectionError) {
-      room.on(RoomEvent.ConnectionError, handleConnectionError);
+
+    // Engine-level debug hooks (if available)
+    // @ts-ignore
+    if (room?.engine) {
+      // @ts-ignore
+      room.engine.on?.('iceConnectionStateChanged', (s: any) => console.log('🧊 ICE state:', s));
+      // @ts-ignore
+      room.engine.on?.('peerConnectionCreated', () => console.log('🧩 PC created'));
+      // @ts-ignore
+      room.engine.on?.('signalConnected', () => console.log('📶 Signal connected (engine)'));
     }
 
-    // Check if already connected
     if (room.state === 'connected') {
       console.log('🎉 ANDROID: Room already connected on mount');
       setIsConnected(true);
@@ -236,10 +242,6 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
       room.off(RoomEvent.Reconnecting, handleReconnecting);
       room.off(RoomEvent.Reconnected, handleReconnected);
       room.off(RoomEvent.ConnectionQualityChanged, handleConnectionQualityChanged);
-      // @ts-ignore
-      if (RoomEvent.ConnectionError) {
-        room.off(RoomEvent.ConnectionError, handleConnectionError);
-      }
     };
   }, [room]);
 
