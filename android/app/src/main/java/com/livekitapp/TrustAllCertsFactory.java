@@ -1,4 +1,4 @@
-package com.livekitapp;
+package com.kkazuma.LiveKitApp;
 
 import com.facebook.react.modules.network.OkHttpClientFactory;
 import com.facebook.react.modules.network.ReactCookieJarContainer;
