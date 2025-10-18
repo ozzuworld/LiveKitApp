@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -15,7 +15,6 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   AudioSession,
-  LiveKitRoom,
   useTracks,
   TrackReferenceOrPlaceholder,
   VideoTrack,
@@ -24,7 +23,7 @@ import {
   useLocalParticipant,
   RoomEvent,
 } from '@livekit/react-native';
-import { Track, RoomConnectOptions, RoomOptions, ConnectionError } from 'livekit-client';
+import { Track, Room, RoomOptions, ConnectionError } from 'livekit-client';
 import { StatusBar } from 'expo-status-bar';
 import TokenService from './utils/tokenService';
 
@@ -79,6 +78,7 @@ export default function App() {
 }
 
 function LiveKitApp() {
+  const [room, setRoom] = useState<Room | null>(null);
   const [token, setToken] = useState('');
   const [livekitUrl, setLivekitUrl] = useState('');
   const [roomName, setRoomName] = useState('default-room');
@@ -88,59 +88,132 @@ function LiveKitApp() {
   const [publishOnJoin, setPublishOnJoin] = useState(true);
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
-  const joinRoom = async () => {
+  // Create room instance once
+  useEffect(() => {
+    const roomInstance = new Room({
+      adaptiveStream: { pixelDensity: 'screen' },
+      publishDefaults: {
+        audio: publishOnJoin,
+        video: publishOnJoin,
+        audioPreset: { maxBitrate: 20_000 },
+      },
+    } as RoomOptions);
+
+    // Set up event listeners IMMEDIATELY after room creation
+    roomInstance.on(RoomEvent.Connected, () => {
+      console.log('✅ Successfully connected to LiveKit room!');
+      setConnectionError(null);
+      setConnected(true);
+    });
+
+    roomInstance.on(RoomEvent.Disconnected, (reason) => {
+      console.log('❌ Disconnected from room:', reason);
+      
+      // Don't show alert for user-initiated disconnect
+      if (reason && !reason.toString().includes('Client initiated')) {
+        Alert.alert('Disconnected', `Connection lost: ${reason || 'Unknown reason'}`);
+      }
+      
+      setConnected(false);
+    });
+
+    roomInstance.on(RoomEvent.ParticipantConnected, (participant) => {
+      console.log('👋 Participant joined:', participant.identity);
+    });
+
+    roomInstance.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      console.log('👋 Participant left:', participant.identity);
+    });
+
+    // Handle connection errors
+    roomInstance.on(RoomEvent.ConnectionError, (error) => {
+      console.error('🔥 Connection error:', error);
+      const errorMessage = error instanceof ConnectionError 
+        ? `Connection failed: ${error.message}` 
+        : `Connection error: ${error}`;
+      
+      setConnectionError(errorMessage);
+      Alert.alert('Connection Error', errorMessage);
+      setConnected(false);
+    });
+
+    setRoom(roomInstance);
+
+    return () => {
+      if (roomInstance.state === 'connected') {
+        roomInstance.disconnect();
+      }
+    };
+  }, []);
+
+  const connectToRoom = useCallback(async () => {
+    if (!room) {
+      console.error('Room not initialized');
+      return;
+    }
+
     // Reset previous connection errors
     setConnectionError(null);
-    
-    // Ask for permissions first; if denied, join signaling-only
-    const granted = await ensureMediaPermissions();
-    setPublishOnJoin(granted);
-    await fetchToken(granted);
-  };
-
-  const fetchToken = async (granted: boolean) => {
-    if (!TokenService.validateRoomName(roomName)) {
-      Alert.alert('Error', 'Room name must be alphanumeric with dashes/underscores only');
-      return;
-    }
-
-    if (!TokenService.validateParticipantName(participantName)) {
-      Alert.alert('Error', 'Participant name must be alphanumeric with dashes/underscores only');
-      return;
-    }
-
     setLoading(true);
+
     try {
+      // Ask for permissions first
+      const granted = await ensureMediaPermissions();
+      setPublishOnJoin(granted);
+
+      if (!TokenService.validateRoomName(roomName)) {
+        Alert.alert('Error', 'Room name must be alphanumeric with dashes/underscores only');
+        return;
+      }
+
+      if (!TokenService.validateParticipantName(participantName)) {
+        Alert.alert('Error', 'Participant name must be alphanumeric with dashes/underscores only');
+        return;
+      }
+
       console.log('Fetching token for:', { roomName, participantName });
       const response = await TokenService.fetchToken(roomName, participantName);
 
       const baseWs = (response.livekitUrl || TokenService.getWebSocketUrl()).replace(/\/$/, '');
-      const rtcUrl = `${baseWs}/rtc`;
+      const rtcUrl = `${baseWs}`; // Don't add /rtc suffix
 
       console.log('Token received successfully');
       console.log('LiveKit URL:', response.livekitUrl);
-      console.log('Final RTC URL:', rtcUrl);
+      console.log('Connecting to:', rtcUrl);
 
       setToken(response.token);
       setLivekitUrl(rtcUrl);
-      setConnected(true);
+
+      // Connect to the room
+      await room.connect(rtcUrl, response.token, {
+        autoSubscribe: true,
+        maxRetries: 3,
+        retryDelays: [1000, 3000, 5000],
+      });
+
+      console.log('🎉 Room connection initiated!');
+
     } catch (error: any) {
-      console.error('Token fetch failed:', error);
+      console.error('Connection failed:', error);
       const errorMessage = error.message || 'Unknown error occurred';
       setConnectionError(errorMessage);
-      Alert.alert('Connection Error', `Failed to get token: ${errorMessage}`);
+      Alert.alert('Connection Error', `Failed to connect: ${errorMessage}`);
+      setConnected(false);
     } finally {
       setLoading(false);
     }
-  };
+  }, [room, roomName, participantName, publishOnJoin]);
 
-  const disconnect = () => {
+  const disconnect = useCallback(() => {
     console.log('User initiated disconnect');
+    if (room && room.state === 'connected') {
+      room.disconnect();
+    }
     setConnected(false);
     setToken('');
     setLivekitUrl('');
     setConnectionError(null);
-  };
+  }, [room]);
 
   useEffect(() => {
     const start = async () => {
@@ -183,8 +256,8 @@ function LiveKitApp() {
 
           <Button
             title={loading ? 'Connecting to June...' : 'Join Room'}
-            onPress={joinRoom}
-            disabled={loading}
+            onPress={connectToRoom}
+            disabled={loading || !room}
           />
 
           {connectionError && (
@@ -199,6 +272,7 @@ function LiveKitApp() {
               <Text style={styles.debugText}>Debug Info:</Text>
               <Text style={styles.debugText}>Token URL: https://api.ozzu.world/livekit/token</Text>
               <Text style={styles.debugText}>WebSocket Base: wss://livekit.ozzu.world</Text>
+              <Text style={styles.debugText}>Room State: {room?.state || 'Not initialized'}</Text>
               <Text style={styles.debugText}>Client Will Connect To: {livekitUrl || 'N/A (not connected yet)'}</Text>
             </View>
           )}
@@ -207,117 +281,34 @@ function LiveKitApp() {
     );
   }
 
+  if (!room) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Initializing room...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       <StatusBar style="light" />
-      <LiveKitRoom
-        serverUrl={livekitUrl}
-        token={token}
-        connect={true}
-        options={{
-          adaptiveStream: { pixelDensity: 'screen' },
-          publishDefaults: {
-            audio: publishOnJoin,
-            video: publishOnJoin,
-            audioPreset: { maxBitrate: 20_000 },
-          },
-        } as RoomOptions}
-        connectOptions={{ 
-          autoSubscribe: true,
-          maxRetries: 3,
-          retryDelays: [1000, 3000, 5000],
-        } as RoomConnectOptions}
-        audio={publishOnJoin}
-        video={publishOnJoin}
-        onConnected={() => {
-          console.log('✅ Successfully connected to LiveKit room!');
-          setConnectionError(null);
-        }}
-        onDisconnected={(reason) => {
-          console.log('❌ Disconnected from room:', reason);
-          
-          // Don't show alert for user-initiated disconnect
-          if (reason && !reason.toString().includes('Client initiated')) {
-            Alert.alert('Disconnected', `Connection lost: ${reason || 'Unknown reason'}`);
-          }
-          
-          setConnected(false);
-          setToken('');
-          setLivekitUrl('');
-        }}
-        onConnectionError={(error) => {
-          console.error('❌ Connection error:', error);
-          const errorMessage = error instanceof ConnectionError 
-            ? `Connection failed: ${error.message}` 
-            : `Connection error: ${error}`;
-          
-          setConnectionError(errorMessage);
-          Alert.alert('Connection Error', errorMessage);
-        }}
-      >
-        <RoomView roomName={roomName} onDisconnect={disconnect} />
-      </LiveKitRoom>
+      <RoomView room={room} roomName={roomName} onDisconnect={disconnect} />
     </SafeAreaView>
   );
 }
 
-const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: () => void }) => {
-  const room = useRoom();
-  const { localParticipant } = useLocalParticipant();
+const RoomView = ({ room, roomName, onDisconnect }: { room: Room; roomName: string; onDisconnect: () => void }) => {
   const tracks = useTracks([
     { source: Track.Source.Camera, withPlaceholder: true },
     { source: Track.Source.ScreenShare, withPlaceholder: false },
-  ]);
+  ], { room });
 
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [isCameraEnabled, setIsCameraEnabled] = useState(true);
 
-  useEffect(() => {
-    if (!room) return;
-
-    const handleConnected = () => {
-      console.log('🎉 Room connection established!');
-      console.log('📊 Room participants:', room.numParticipants);
-      console.log('👤 Local participant:', localParticipant.identity);
-    };
-
-    const handleParticipantConnected = (participant: any) => {
-      console.log('👋 Participant joined:', participant.identity);
-    };
-
-    const handleParticipantDisconnected = (participant: any) => {
-      console.log('👋 Participant left:', participant.identity);
-    };
-
-    const handleDisconnected = (reason?: any) => {
-      console.log('💔 Room disconnected:', reason);
-    };
-
-    const handleConnectionError = (error: any) => {
-      console.error('❌ Room connection error:', error);
-    };
-
-    room.on(RoomEvent.Connected, handleConnected);
-    room.on(RoomEvent.ParticipantConnected, handleParticipantConnected);
-    room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
-    room.on(RoomEvent.Disconnected, handleDisconnected);
-    
-    // Add error event listener if available
-    if (RoomEvent.ConnectionError) {
-      room.on(RoomEvent.ConnectionError, handleConnectionError);
-    }
-
-    return () => {
-      room.off(RoomEvent.Connected, handleConnected);
-      room.off(RoomEvent.ParticipantConnected, handleParticipantConnected);
-      room.off(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
-      room.off(RoomEvent.Disconnected, handleDisconnected);
-      
-      if (RoomEvent.ConnectionError) {
-        room.off(RoomEvent.ConnectionError, handleConnectionError);
-      }
-    };
-  }, [room, localParticipant]);
+  const localParticipant = room.localParticipant;
 
   const toggleMicrophone = async () => {
     try {
@@ -358,10 +349,10 @@ const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: 
     );
   };
 
-  if (!room) {
+  if (!room || room.state !== 'connected') {
     return (
       <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Connecting to room...</Text>
+        <Text style={styles.loadingText}>Connecting to room... ({room?.state || 'unknown'})</Text>
       </View>
     );
   }
@@ -371,7 +362,7 @@ const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: 
       <View style={styles.header}>
         <Text style={styles.roomTitle}>Room: {roomName}</Text>
         <Text style={styles.participantCount}>
-          {room.numParticipants} participant{room.numParticipants !== 1 ? 's' : ''}
+          {Array.from(room.remoteParticipants.values()).length + 1} participant(s)
         </Text>
         <Text style={styles.connectionStatus}>Connected to June Platform ✅</Text>
       </View>
