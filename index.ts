@@ -1,5 +1,10 @@
-import { registerRootComponent } from 'expo';
+import { registerGlobals } from '@livekit/react-native';
 
+// CRITICAL: registerGlobals must be called FIRST, before any other imports
+// This sets up WebRTC polyfills required by LiveKit
+registerGlobals();
+
+import { registerRootComponent } from 'expo';
 import App from './App';
 
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);
