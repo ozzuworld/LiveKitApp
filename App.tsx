@@ -32,6 +32,7 @@ export default function App() {
   const [shouldConnect, setShouldConnect] = useState(false);
   const [roomName, setRoomName] = useState('test-audio-room');
   const [participantName, setParticipantName] = useState(`user-${Math.floor(Math.random() * 1000)}`);
+  const [connectionTimeout, setConnectionTimeout] = useState<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let start = async () => {
@@ -40,6 +41,9 @@ export default function App() {
     start();
     return () => {
       AudioSession.stopAudioSession();
+      if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+      }
     };
   }, []);
 
@@ -54,23 +58,30 @@ export default function App() {
         }
       }
 
-      console.log('Fetching token...');
+      console.log('🚀 STARTING ANDROID CONNECTION...');
       const response = await TokenService.fetchToken(roomName, participantName);
-      console.log('Token response:', { 
+      console.log('✅ Token received:', { 
         hasToken: !!response.token, 
         tokenLength: response.token?.length,
         url: response.livekitUrl 
       });
       
       const finalUrl = response.livekitUrl || TokenService.getWebSocketUrl();
-      console.log('Will connect to:', finalUrl);
-      console.log('Token preview:', response.token.substring(0, 50) + '...');
+      console.log('📡 Attempting connection to:', finalUrl);
+      console.log('🔑 Token preview:', response.token.substring(0, 50) + '...');
       
       setToken(response.token);
       setUrl(finalUrl);
       setShouldConnect(true);
+      
+      // Set timeout to detect hanging connections
+      const timeout = setTimeout(() => {
+        console.log('⚠️ CONNECTION TAKING TOO LONG - Check server status!');
+      }, 15000);
+      setConnectionTimeout(timeout);
+      
     } catch (error: any) {
-      console.error('Connection error:', error.message);
+      console.error('🔥 Connection setup failed:', error.message);
     }
   };
 
@@ -78,6 +89,10 @@ export default function App() {
     setShouldConnect(false);
     setToken('');
     setUrl('');
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      setConnectionTimeout(null);
+    }
   };
 
   if (!shouldConnect) {
@@ -109,7 +124,7 @@ export default function App() {
     );
   }
 
-  console.log('Rendering LiveKitRoom with:', { url, hasToken: !!token, tokenLength: token.length });
+  console.log('📱 Rendering LiveKitRoom with:', { url, hasToken: !!token, tokenLength: token.length });
 
   return (
     <LiveKitRoom
@@ -118,12 +133,25 @@ export default function App() {
       connect={true}
       options={{
         adaptiveStream: { pixelDensity: 'screen' },
+        // Add ICE server configuration for better Android connectivity
+        rtcConfig: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+          ]
+        }
       }}
       audio={true}
       video={false}
       onDisconnected={handleDisconnect}
-      onConnected={() => console.log('LiveKitRoom onConnected callback fired!')}
-      onError={(error) => console.error('LiveKitRoom error:', error)}
+      onConnected={() => {
+        console.log('🎉 ANDROID APP CONNECTED SUCCESSFULLY!');
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          setConnectionTimeout(null);
+        }
+      }}
+      onError={(error) => console.error('🔥 LiveKitRoom Android error:', error)}
     >
       <RoomView onDisconnect={handleDisconnect} />
     </LiveKitRoom>
@@ -139,45 +167,45 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
   useEffect(() => {
     if (!room) return;
 
-    console.log('Setting up room event listeners...');
-    console.log('Initial room state:', room.state);
+    console.log('🔧 Setting up room event listeners...');
+    console.log('📊 Initial room state:', room.state);
 
     const handleConnected = () => {
-      console.log('✅ Room Connected event fired!');
+      console.log('🎉 ANDROID: Room Connected event fired!');
       setIsConnected(true);
       setConnectionState('connected');
     };
 
     const handleDisconnected = (reason?: any) => {
-      console.log('❌ Room Disconnected:', reason);
+      console.log('❌ ANDROID: Room Disconnected:', reason);
       setIsConnected(false);
       setConnectionState('disconnected');
     };
 
     const handleConnectionStateChanged = (state: string) => {
-      console.log('🔄 Connection state changed:', state);
+      console.log('🔄 ANDROID: Connection state changed:', state);
       setConnectionState(state);
     };
 
     const handleSignalConnected = () => {
-      console.log('📡 Signal connected!');
+      console.log('📡 ANDROID: Signal connected!');
     };
 
     const handleReconnecting = () => {
-      console.log('🔄 Reconnecting...');
+      console.log('🔄 ANDROID: Reconnecting...');
     };
 
     const handleReconnected = () => {
-      console.log('✅ Reconnected!');
+      console.log('✅ ANDROID: Reconnected!');
     };
 
     const handleConnectionQualityChanged = (quality: any, participant: any) => {
-      console.log('📊 Connection quality:', quality, participant?.identity);
+      console.log('📊 ANDROID: Connection quality:', quality, participant?.identity);
     };
 
     const handleConnectionError = (error: any) => {
-      console.error('🔥 Room connection error:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
+      console.error('🔥 ANDROID: Room connection error:', error);
+      console.error('🔥 ANDROID: Error details:', JSON.stringify(error, null, 2));
     };
 
     room.on(RoomEvent.Connected, handleConnected);
@@ -195,7 +223,7 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
 
     // Check if already connected
     if (room.state === 'connected') {
-      console.log('Room already connected on mount');
+      console.log('🎉 ANDROID: Room already connected on mount');
       setIsConnected(true);
       setConnectionState('connected');
     }
@@ -232,14 +260,17 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
           </Text>
           {isConnected ? (
             <>
-              <Text style={styles.connectedText}>✅ Connected</Text>
+              <Text style={styles.connectedText}>🎉 ANDROID CONNECTED!</Text>
               <Text style={styles.statusText}>Room: {room?.name}</Text>
               <Text style={styles.statusText}>
                 Participants: {room?.remoteParticipants?.size || 0 + 1}
               </Text>
             </>
           ) : (
-            <ActivityIndicator size="large" color="#fff" />
+            <>
+              <ActivityIndicator size="large" color="#fff" />
+              <Text style={styles.statusText}>Connecting to LiveKit...</Text>
+            </>
           )}
         </View>
 
