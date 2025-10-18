@@ -19,7 +19,8 @@
     "expo-status-bar": "~3.0.8",
     "livekit-client": "^2.15.11",
     "react": "19.1.0",
-    "react-native": "0.81.4"
+    "react-native": "0.81.4",
+    "react-native-safe-area-context": "4.14.0"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
