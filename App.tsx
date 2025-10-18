@@ -8,9 +8,9 @@ import {
   TextInput,
   Text,
   Alert,
-  SafeAreaView,
   Dimensions,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   AudioSession,
   LiveKitRoom,
@@ -23,7 +23,7 @@ import {
   useLocalParticipant,
   RoomEvent,
 } from '@livekit/react-native';
-import { Track, Room } from 'livekit-client';
+import { Track, Room, RoomConnectOptions, RoomOptions } from 'livekit-client';
 import { StatusBar } from 'expo-status-bar';
 import TokenService from './utils/tokenService';
 
@@ -31,6 +31,14 @@ import TokenService from './utils/tokenService';
 registerGlobals();
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <LiveKitApp />
+    </SafeAreaProvider>
+  );
+}
+
+function LiveKitApp() {
   const [token, setToken] = useState("");
   const [livekitUrl, setLivekitUrl] = useState("");
   const [roomName, setRoomName] = useState("default-room");
@@ -67,7 +75,7 @@ export default function App() {
       setConnected(true);
     } catch (error) {
       console.error('Failed to fetch token:', error);
-      Alert.alert('Connection Error', `Failed to get token: ${error.message}`);
+      Alert.alert('Connection Error', `Failed to get token: ${error.message}\n\nTry checking if:\n- June Platform is running\n- You have proper authentication`);
     } finally {
       setLoading(false);
     }
@@ -98,7 +106,7 @@ export default function App() {
 
   if (!connected) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
         <StatusBar style="auto" />
         <View style={styles.loginContainer}>
           <Text style={styles.title}>LiveKit Voice Chat</Text>
@@ -131,6 +139,7 @@ export default function App() {
               <Text style={styles.debugText}>Debug Info:</Text>
               <Text style={styles.debugText}>Token URL: https://api.ozzu.world/livekit/token</Text>
               <Text style={styles.debugText}>WebSocket: wss://livekit.ozzu.world</Text>
+              <Text style={styles.debugText}>Note: Backend may require authentication</Text>
             </View>
           )}
         </View>
@@ -139,7 +148,7 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       <StatusBar style="light" />
       <LiveKitRoom
         serverUrl={livekitUrl}
@@ -152,14 +161,21 @@ export default function App() {
               maxBitrate: 20_000,
             },
           },
-        }}
+        } as RoomOptions}
+        connectOptions={{
+          autoSubscribe: true,
+        } as RoomConnectOptions}
         audio={true}
         video={true}
         onDisconnected={(reason) => {
           console.log('Disconnected from room:', reason);
+          Alert.alert('Disconnected', `Connection lost: ${reason || 'Unknown reason'}`);
           setConnected(false);
           setToken("");
           setLivekitUrl("");
+        }}
+        onConnected={() => {
+          console.log('Successfully connected to LiveKit room');
         }}
       >
         <RoomView roomName={roomName} onDisconnect={disconnect} />
@@ -180,36 +196,57 @@ const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: 
   const [isCameraEnabled, setIsCameraEnabled] = useState(true);
 
   useEffect(() => {
-    const handleRoomEvent = (event: any) => {
-      console.log('Room event:', event);
-    };
+    if (!room) return;
 
-    room.on(RoomEvent.Connected, () => {
+    const handleConnected = () => {
       console.log('Connected to room successfully');
       console.log('Room participants:', room.numParticipants);
-    });
+      console.log('Local participant:', localParticipant.identity);
+    };
     
-    room.on(RoomEvent.ParticipantConnected, (participant) => {
+    const handleParticipantConnected = (participant: any) => {
       console.log('Participant connected:', participant.identity);
-    });
+    };
     
-    room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+    const handleParticipantDisconnected = (participant: any) => {
       console.log('Participant disconnected:', participant.identity);
-    });
+    };
+
+    const handleDisconnected = (reason?: any) => {
+      console.log('Room disconnected:', reason);
+    };
+
+    room.on(RoomEvent.Connected, handleConnected);
+    room.on(RoomEvent.ParticipantConnected, handleParticipantConnected);
+    room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
+    room.on(RoomEvent.Disconnected, handleDisconnected);
 
     return () => {
-      room.removeAllListeners();
+      room.off(RoomEvent.Connected, handleConnected);
+      room.off(RoomEvent.ParticipantConnected, handleParticipantConnected);
+      room.off(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
+      room.off(RoomEvent.Disconnected, handleDisconnected);
     };
-  }, [room]);
+  }, [room, localParticipant]);
 
   const toggleMicrophone = async () => {
-    await localParticipant.setMicrophoneEnabled(!isMicEnabled);
-    setIsMicEnabled(!isMicEnabled);
+    try {
+      await localParticipant.setMicrophoneEnabled(!isMicEnabled);
+      setIsMicEnabled(!isMicEnabled);
+      console.log('Microphone toggled:', !isMicEnabled);
+    } catch (error) {
+      console.error('Failed to toggle microphone:', error);
+    }
   };
 
   const toggleCamera = async () => {
-    await localParticipant.setCameraEnabled(!isCameraEnabled);
-    setIsCameraEnabled(!isCameraEnabled);
+    try {
+      await localParticipant.setCameraEnabled(!isCameraEnabled);
+      setIsCameraEnabled(!isCameraEnabled);
+      console.log('Camera toggled:', !isCameraEnabled);
+    } catch (error) {
+      console.error('Failed to toggle camera:', error);
+    }
   };
 
   const renderTrack: ListRenderItem<TrackReferenceOrPlaceholder> = ({ item }) => {
@@ -235,6 +272,14 @@ const RoomView = ({ roomName, onDisconnect }: { roomName: string; onDisconnect: 
       );
     }
   };
+
+  if (!room) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={styles.loadingText}>Connecting to room...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.roomContainer}>
@@ -327,6 +372,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginBottom: 2,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+  },
+  loadingText: {
+    color: '#fff',
+    fontSize: 16,
   },
   roomContainer: {
     flex: 1,
