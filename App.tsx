@@ -9,6 +9,8 @@ import {
   Text,
   Alert,
   Dimensions,
+  PermissionsAndroid,
+  Platform,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -26,7 +28,47 @@ import { Track, RoomConnectOptions, RoomOptions } from 'livekit-client';
 import { StatusBar } from 'expo-status-bar';
 import TokenService from './utils/tokenService';
 
-// NOTE: registerGlobals is now called in index.ts (entry point) - DO NOT call it here again
+// NOTE: registerGlobals is called in index.ts
+
+async function ensureMediaPermissions(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+
+  try {
+    const mic = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      {
+        title: 'Microphone Permission',
+        message: 'LiveKit needs access to your microphone for voice.',
+        buttonPositive: 'OK',
+      }
+    );
+
+    const cam = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.CAMERA,
+      {
+        title: 'Camera Permission',
+        message: 'LiveKit needs access to your camera for video.',
+        buttonPositive: 'OK',
+      }
+    );
+
+    const granted =
+      mic === PermissionsAndroid.RESULTS.GRANTED &&
+      cam === PermissionsAndroid.RESULTS.GRANTED;
+
+    if (!granted) {
+      Alert.alert(
+        'Permissions required',
+        'Please allow microphone and camera permissions to publish media. You can still join without media.'
+      );
+    }
+
+    return granted;
+  } catch (e) {
+    console.error('Permission request failed:', e);
+    return false;
+  }
+}
 
 export default function App() {
   return (
@@ -43,8 +85,16 @@ function LiveKitApp() {
   const [participantName, setParticipantName] = useState(`user-${Math.floor(Math.random() * 1000)}`);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [publishOnJoin, setPublishOnJoin] = useState(true);
 
-  const fetchToken = async () => {
+  const joinRoom = async () => {
+    // Ask for permissions first; if denied, join signaling-only
+    const granted = await ensureMediaPermissions();
+    setPublishOnJoin(granted);
+    await fetchToken(granted);
+  };
+
+  const fetchToken = async (granted: boolean) => {
     if (!TokenService.validateRoomName(roomName)) {
       Alert.alert('Error', 'Room name must be alphanumeric with dashes/underscores only');
       return;
@@ -60,7 +110,6 @@ function LiveKitApp() {
       console.log('Fetching token for:', { roomName, participantName });
       const response = await TokenService.fetchToken(roomName, participantName);
 
-      // Ensure /rtc is appended to the base URL and avoid trailing slashes
       const baseWs = (response.livekitUrl || TokenService.getWebSocketUrl()).replace(/\/$/, '');
       const rtcUrl = `${baseWs}/rtc`;
 
@@ -126,7 +175,7 @@ function LiveKitApp() {
 
           <Button
             title={loading ? 'Connecting to June...' : 'Join Room'}
-            onPress={fetchToken}
+            onPress={joinRoom}
             disabled={loading}
           />
 
@@ -147,18 +196,20 @@ function LiveKitApp() {
     <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       <StatusBar style="light" />
       <LiveKitRoom
-        serverUrl={livekitUrl} // wss://livekit.ozzu.world/rtc
-        token={token}          // pass token via prop only
+        serverUrl={livekitUrl}
+        token={token}
         connect={true}
         options={{
           adaptiveStream: { pixelDensity: 'screen' },
           publishDefaults: {
+            audio: publishOnJoin,
+            video: publishOnJoin,
             audioPreset: { maxBitrate: 20_000 },
           },
         } as RoomOptions}
         connectOptions={{ autoSubscribe: true } as RoomConnectOptions}
-        audio={true}
-        video={true}
+        audio={publishOnJoin}
+        video={publishOnJoin}
         onConnected={() => {
           console.log('✅ Successfully connected to LiveKit room!');
         }}
