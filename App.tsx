@@ -54,9 +54,20 @@ export default function App() {
         }
       }
 
+      console.log('Fetching token...');
       const response = await TokenService.fetchToken(roomName, participantName);
+      console.log('Token response:', { 
+        hasToken: !!response.token, 
+        tokenLength: response.token?.length,
+        url: response.livekitUrl 
+      });
+      
+      const finalUrl = response.livekitUrl || TokenService.getWebSocketUrl();
+      console.log('Will connect to:', finalUrl);
+      console.log('Token preview:', response.token.substring(0, 50) + '...');
+      
       setToken(response.token);
-      setUrl(response.livekitUrl || TokenService.getWebSocketUrl());
+      setUrl(finalUrl);
       setShouldConnect(true);
     } catch (error: any) {
       console.error('Connection error:', error.message);
@@ -98,6 +109,8 @@ export default function App() {
     );
   }
 
+  console.log('Rendering LiveKitRoom with:', { url, hasToken: !!token, tokenLength: token.length });
+
   return (
     <LiveKitRoom
       serverUrl={url}
@@ -109,6 +122,8 @@ export default function App() {
       audio={true}
       video={false}
       onDisconnected={handleDisconnect}
+      onConnected={() => console.log('LiveKitRoom onConnected callback fired!')}
+      onError={(error) => console.error('LiveKitRoom error:', error)}
     >
       <RoomView onDisconnect={handleDisconnect} />
     </LiveKitRoom>
@@ -160,6 +175,11 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
       console.log('📊 Connection quality:', quality, participant?.identity);
     };
 
+    const handleConnectionError = (error: any) => {
+      console.error('🔥 Room connection error:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+    };
+
     room.on(RoomEvent.Connected, handleConnected);
     room.on(RoomEvent.Disconnected, handleDisconnected);
     room.on(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
@@ -167,6 +187,11 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
     room.on(RoomEvent.Reconnecting, handleReconnecting);
     room.on(RoomEvent.Reconnected, handleReconnected);
     room.on(RoomEvent.ConnectionQualityChanged, handleConnectionQualityChanged);
+    
+    // @ts-ignore - ConnectionError might not be in the type definitions
+    if (RoomEvent.ConnectionError) {
+      room.on(RoomEvent.ConnectionError, handleConnectionError);
+    }
 
     // Check if already connected
     if (room.state === 'connected') {
@@ -183,6 +208,10 @@ const RoomView = ({ onDisconnect }: { onDisconnect: () => void }) => {
       room.off(RoomEvent.Reconnecting, handleReconnecting);
       room.off(RoomEvent.Reconnected, handleReconnected);
       room.off(RoomEvent.ConnectionQualityChanged, handleConnectionQualityChanged);
+      // @ts-ignore
+      if (RoomEvent.ConnectionError) {
+        room.off(RoomEvent.ConnectionError, handleConnectionError);
+      }
     };
   }, [room]);
 
