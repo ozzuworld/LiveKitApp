@@ -9,10 +9,10 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@config-plugins/react-native-webrtc": "^13.0.0",
     "@livekit/react-native": "^2.9.3",
     "@livekit/react-native-expo-plugin": "^1.0.1",
     "@livekit/react-native-webrtc": "^137.0.2",
-    "@config-plugins/react-native-webrtc": "^13.0.0",
     "expo": "~54.0.13",
     "expo-dev-client": "^6.0.15",
     "expo-status-bar": "~3.0.8",
